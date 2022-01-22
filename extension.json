@@ -1,0 +1,13 @@
+{
+  "name": "MSTP ",
+  "apiVersion": "1.0.0",
+  "author": "Hubert Bossy",
+  "version": "0.0.1",
+  "description": "  ",
+  "extensions": {
+    "MSTP ": {
+      "type": "HighLevelAnalyzer",
+      "entryPoint": "HighLevelAnalyzer.Hla"
+    }
+  }
+}
