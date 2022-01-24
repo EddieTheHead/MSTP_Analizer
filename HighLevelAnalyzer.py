@@ -144,10 +144,7 @@ class Hla(HighLevelAnalyzer):
         'MalformedMSTPFrame': {
             'format': 'Malformed frame: error: {{data.error}}, type: {{data.frame_type}}, dst: {{data.dst_addr}}, src: {{data.src_addr}}, header crc:{{data.header_crc}}'        
         },
-       'DataSection': {
-            'format': 'data',
-        },        
-
+        
     }
     
 
@@ -202,31 +199,37 @@ class Hla(HighLevelAnalyzer):
                 self.mstp_frame.update({'valid' : False, 'error': 'timeout'})
                 # invalid frame
             elif self.index == 0:
+                self.last_timestamp = timestamp
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame_type = data_register
                 self.mstp_frame.update({'frame_type' : data_register})
                 if DEBUG: print('frame_type:', data_register)
                 self.index = 1
             elif self.index == 1:
+                self.last_timestamp = timestamp
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame.update({'dst_addr' : data_register})
                 if DEBUG: print('dst_addr:', hex(data_register))
                 self.index = 2
             elif self.index == 2:
+                self.last_timestamp = timestamp
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame.update({'src_addr' : data_register})
                 if DEBUG: print('src_addr:', hex(data_register))
                 self.index = 3
             elif self.index == 3:
+                self.last_timestamp = timestamp
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame.update({'len' : data_register * 256})
                 self.index = 4            
             elif self.index == 4:
+                self.last_timestamp = timestamp
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame.update({'len' : self.mstp_frame['len'] + data_register})
                 self.index = 5 
                 if DEBUG: print('len:', self.mstp_frame['len'])
             elif self.index == 5:
+                self.last_timestamp = timestamp
                 # In the HEADER_CRC state, the node validates the CRC
                 #    on the fixed  message header.
                 self.header_crc = crc_calc_header( data_register, self.header_crc) 
@@ -265,19 +268,22 @@ class Hla(HighLevelAnalyzer):
                 # invalid frame   
                 self.mstp_frame.update({'valid' : False, 'error': 'timeout'})
             elif self.index < self.mstp_frame['len']:
+                self.last_timestamp = timestamp
                 # data octet
                 self.data_crc = crc_calc_data( data_register, self.data_crc)      
                 self.data.append(data_register)
-                print(self.data)
+                # print(self.data)
                 self.index += 1
                 # SKIP_DATA or DATA - no change in state
             elif self.index == self.mstp_frame['len']:
+                self.last_timestamp = timestamp
                 self.mstp_frame.update({'data' : self.data})
                 # CRC 1
                 self.data_crc = crc_calc_data( data_register, self.data_crc)      
                 self.mstp_frame.update({'data_actual_crc_msb' : data_register})
                 self.index += 1
             elif self.index == self.mstp_frame['len']+1:
+                self.last_timestamp = timestamp
                 # CRC 2
                 self.data_crc = crc_calc_data( data_register, self.data_crc)      
                 self.mstp_frame.update({'data_actual_crc_lsb' : data_register})                
