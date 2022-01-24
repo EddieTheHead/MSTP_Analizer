@@ -132,6 +132,7 @@ def crc_calc_data(data_value : int, crc_value : int):
 class Hla(HighLevelAnalyzer):
     # List of settings that a user can set for this High Level Analyzer.
     timeout_setting = NumberSetting(min_value=0, max_value=100)
+    # format_settings = ChoicesSetting()
 
     # An optional list of types this analyzer produces, providing a way to customize the way frames are displayed in Logic 2.
     result_types = {
@@ -144,16 +145,36 @@ class Hla(HighLevelAnalyzer):
         'MalformedMSTPFrame': {
             'format': 'Malformed frame: error: {{data.error}}, type: {{data.frame_type}}, dst: {{data.dst_addr}}, src: {{data.src_addr}}, header crc:{{data.header_crc}}'        
         },
-        
+       'DataBytes': {
+            'format': 'data',
+        },
+        'DataCRCBytes': {
+            'format': 'data crc: {{data.data_crc}}'
+        },
+        'HeaderCRCBytes': {
+            'format': 'header crc: {{data.header_crc}}'
+        },       
+        'PreambleBytes': {
+            'format': 'preamble '
+        },
+        'SrcAddressByte': {
+            'format': 'src: {{data.src_addr}}',
+        },        
+        'DstAddressByte': {
+            'format': 'dst: {{data.dst_addr}}',
+        },
+        'DataLengthBytes':{
+            'format': 'data length: {{data.data_len}}'
+        }            
     }
     
 
-    def receive_fsm(self, octet, timestamp):
+    def receive_fsm(self, octet, timestamp_start, timestamp_end):
         data_register = int.from_bytes(octet, 'big')
         # if DEBUG: print('receive_fsm data:', hex(data_register), 'timestamp', timestamp)
         if self.receive_state == MSTP_RECEIVE_STATE_IDLE:
             if DEBUG: print('MSTP_RECEIVE_STATE_IDLE')
-            self.start_time = timestamp
+            self.start_time = timestamp_start
             self.mstp_frame = {
                 'data' : [],
                 'src_addr' : None, 
@@ -168,23 +189,25 @@ class Hla(HighLevelAnalyzer):
 
             # In the IDLE state, the node waits for the beginning of a frame.
             if data_register == 0x55:
-                self.last_timestamp = timestamp
+                self.last_timestamp =timestamp_start
                 # Preamble1
+                self.mstp_frame.update({'preamble_start_time' : timestamp_start})
                 self.receive_state = MSTP_RECEIVE_STATE_PREAMBLE
         elif self.receive_state == MSTP_RECEIVE_STATE_PREAMBLE:
             if DEBUG: print('MSTP_RECEIVE_STATE_PREAMBLE')
-            # if DEBUG: print('time diff:', timestamp - self.last_timestamp)
-            if timestamp - self.last_timestamp > self.timeout:
+            # if DEBUG: print('time diff:', timestamp_start - self.last_timestamp)
+            if timestamp_start - self.last_timestamp > self.timeout:
                 self.mstp_frame.update({'valid' : False, 'error': 'timeout'})
                 self.receive_state = MSTP_RECEIVE_STATE_IDLE
             # In the PREAMBLE state, the node waits for the
             #    second octet of the preamble.
             elif data_register == 0xFF:                
-                self.last_timestamp = timestamp
+                self.last_timestamp = timestamp_start
                 # Preamble2
                 self.index = 0
                 self.header_crc = 0xFF
                 # receive the remainder of the frame.
+                self.mstp_frame.update({'preamble_end_time' : timestamp_end})
                 self.receive_state = MSTP_RECEIVE_STATE_HEADER
             elif data_register == 0x55:
                 # ignore RepeatedPreamble1
@@ -194,42 +217,52 @@ class Hla(HighLevelAnalyzer):
                 self.receive_state = MSTP_RECEIVE_STATE_IDLE
         elif self.receive_state == MSTP_RECEIVE_STATE_HEADER:
             if DEBUG: print('MSTP_RECEIVE_STATE_HEADER')
-            if timestamp - self.last_timestamp > self.timeout:
+            if timestamp_start - self.last_timestamp > self.timeout:
                 self.receive_state = MSTP_RECEIVE_STATE_IDLE
                 self.mstp_frame.update({'valid' : False, 'error': 'timeout'})
                 # invalid frame
             elif self.index == 0:
-                self.last_timestamp = timestamp
+                self.last_timestamp = timestamp_start
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame_type = data_register
                 self.mstp_frame.update({'frame_type' : data_register})
                 if DEBUG: print('frame_type:', data_register)
+                self.mstp_frame.update({'frame_type_start_time' : timestamp_start})
+                self.mstp_frame.update({'frame_type_end_time' : timestamp_end})
                 self.index = 1
             elif self.index == 1:
-                self.last_timestamp = timestamp
+                self.last_timestamp = timestamp_start
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame.update({'dst_addr' : data_register})
                 if DEBUG: print('dst_addr:', hex(data_register))
+                self.mstp_frame.update({'dst_addr_start_time' : timestamp_start})
+                self.mstp_frame.update({'dst_addr_end_time' : timestamp_end})                
                 self.index = 2
             elif self.index == 2:
-                self.last_timestamp = timestamp
+                self.last_timestamp = timestamp_start
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame.update({'src_addr' : data_register})
                 if DEBUG: print('src_addr:', hex(data_register))
+                self.mstp_frame.update({'src_addr_start_time' : timestamp_start})
+                self.mstp_frame.update({'src_addr_end_time' : timestamp_end})                  
                 self.index = 3
             elif self.index == 3:
-                self.last_timestamp = timestamp
+                self.last_timestamp = timestamp_start
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame.update({'len' : data_register * 256})
+                self.mstp_frame.update({'len_start_time' : timestamp_start})
                 self.index = 4            
             elif self.index == 4:
-                self.last_timestamp = timestamp
+                self.last_timestamp = timestamp_start
                 self.header_crc = crc_calc_header( data_register, self.header_crc)      
                 self.mstp_frame.update({'len' : self.mstp_frame['len'] + data_register})
                 self.index = 5 
                 if DEBUG: print('len:', self.mstp_frame['len'])
+                self.mstp_frame.update({'len_end_time' : timestamp_end})                  
             elif self.index == 5:
-                self.last_timestamp = timestamp
+                self.last_timestamp = timestamp_start
+                self.mstp_frame.update({'header_crc_start_time' : timestamp_start})
+                self.mstp_frame.update({'header_crc_end_time' : timestamp_end})
                 # In the HEADER_CRC state, the node validates the CRC
                 #    on the fixed  message header.
                 self.header_crc = crc_calc_header( data_register, self.header_crc) 
@@ -261,14 +294,16 @@ class Hla(HighLevelAnalyzer):
         elif ( self.receive_state == MSTP_RECEIVE_STATE_DATA or
             self.receive_state == MSTP_RECEIVE_STATE_DATA):
             if DEBUG: print('MSTP_RECEIVE_STATE_DATA')
-            if DEBUG: print('data[{}]: 0x{:02X}, timestamp: {}'.format(self.index, data_register, timestamp) )
+            if DEBUG: print('data[{}]: 0x{:02X}, timestamp: {}'.format(self.index, data_register, timestamp_start) )
 
-            if timestamp - self.last_timestamp > self.timeout:
+            if timestamp_start - self.last_timestamp > self.timeout:
                 self.receive_state = MSTP_RECEIVE_STATE_IDLE
                 # invalid frame   
                 self.mstp_frame.update({'valid' : False, 'error': 'timeout'})
             elif self.index < self.mstp_frame['len']:
-                self.last_timestamp = timestamp
+                if self.index == 0: 
+                    self.mstp_frame.update({'data_start_time' : timestamp_start})
+                self.last_timestamp = timestamp_start
                 # data octet
                 self.data_crc = crc_calc_data( data_register, self.data_crc)      
                 self.data.append(data_register)
@@ -276,14 +311,17 @@ class Hla(HighLevelAnalyzer):
                 self.index += 1
                 # SKIP_DATA or DATA - no change in state
             elif self.index == self.mstp_frame['len']:
-                self.last_timestamp = timestamp
+                self.last_timestamp = timestamp_start
                 self.mstp_frame.update({'data' : self.data})
+                self.mstp_frame.update({'data_end_time' : timestamp_start})
+                self.mstp_frame.update({'data_crc_start_time' : timestamp_start})
                 # CRC 1
                 self.data_crc = crc_calc_data( data_register, self.data_crc)      
                 self.mstp_frame.update({'data_actual_crc_msb' : data_register})
                 self.index += 1
             elif self.index == self.mstp_frame['len']+1:
-                self.last_timestamp = timestamp
+                self.last_timestamp = timestamp_start
+                self.mstp_frame.update({'data_crc_end_time' : timestamp_end})
                 # CRC 2
                 self.data_crc = crc_calc_data( data_register, self.data_crc)      
                 self.mstp_frame.update({'data_actual_crc_lsb' : data_register})                
@@ -294,7 +332,7 @@ class Hla(HighLevelAnalyzer):
                 else:
                     self.mstp_frame.update({'valid' : False, 'error': 'bad data CRC'})
                 self.receive_state = MSTP_RECEIVE_STATE_IDLE
-        self.mstp_frame.update({'end_time' : timestamp})  
+        self.mstp_frame.update({'end_time' : timestamp_end})  
 
     def __init__(self):
         '''
@@ -321,29 +359,84 @@ class Hla(HighLevelAnalyzer):
 
         The type and data values in `frame` will depend on the input analyzer.
         '''
-        self.receive_fsm(octet=frame.data['data'], timestamp=frame.start_time)
-
+        self.receive_fsm(octet=frame.data['data'], timestamp_start=frame.start_time, timestamp_end=frame.end_time )
+        frames = []
         if 'valid' in self.mstp_frame.keys():
             if self.mstp_frame['valid']:
+                # print(self.mstp_frame)
                 if DEBUG: print('returning valid frame')
-                if self.mstp_frame['len'] > 0:
-                    return AnalyzerFrame('MSTPFrameWithBytes', self.start_time, frame.end_time,
-                        {'frame_type': frame_types_txts[self.mstp_frame['frame_type']],
-                        'src_addr': f"0x{self.mstp_frame['src_addr']:02X}",
-                        'dst_addr': f"0x{self.mstp_frame['dst_addr']:02X}",
-                        'data_len': self.mstp_frame['len'],
-                        'header_crc' : f"0x{self.mstp_frame['actual_header_crc']:02X}",
-                        'data_crc' : f"0x{self.mstp_frame['data_actual_crc_msb']:02X}{self.mstp_frame['data_actual_crc_lsb']:02X}",
-                        'data_bytes': '[{} ]'.format(' '.join( [ f'0x{v:02X}' for v in self.mstp_frame['data']]))
-                        })
-                else: 
-                    return AnalyzerFrame('MSTPFrame', self.start_time, frame.end_time,
-                        {'frame_type': frame_types_txts[self.mstp_frame['frame_type']],
-                        'src_addr': f"0x{self.mstp_frame['src_addr']:02X}",
-                        'dst_addr': f"0x{self.mstp_frame['dst_addr']:02X}",
-                        'data_len': self.mstp_frame['len'],
-                        'header_crc' : f"0x{self.mstp_frame['actual_header_crc']:02X}",
-                        })
+                if 'preamble_start_time' in self.mstp_frame.keys() and 'preamble_end_time' in self.mstp_frame.keys():
+                    frames.append(
+                        AnalyzerFrame('PreambleBytes',
+                            self.mstp_frame['preamble_start_time'], 
+                            self.mstp_frame['preamble_end_time'])
+                    )
+                if 'header_crc_start_time' in self.mstp_frame.keys() and 'header_crc_end_time' in self.mstp_frame.keys():
+                    frames.append(
+                        AnalyzerFrame('HeaderCRCBytes',
+                            self.mstp_frame['header_crc_start_time'], 
+                            self.mstp_frame['header_crc_end_time'],
+                            { 'header_crc' :  f"0x{self.mstp_frame['actual_header_crc']:02X}"}
+                        )
+                    )
+                if 'src_addr_start_time' in self.mstp_frame.keys() and 'src_addr_end_time' in self.mstp_frame.keys():
+                    frames.append(
+                        AnalyzerFrame('SrcAddressByte',
+                            self.mstp_frame['src_addr_start_time'], 
+                            self.mstp_frame['src_addr_end_time'],
+                            {'src_addr': f"0x{self.mstp_frame['src_addr']:02X}"}
+                        )
+                    )
+                if 'dst_addr_start_time' in self.mstp_frame.keys() and 'dst_addr_end_time' in self.mstp_frame.keys():
+                    frames.append(
+                        AnalyzerFrame('DstAddressByte',
+                            self.mstp_frame['dst_addr_start_time'], 
+                            self.mstp_frame['dst_addr_end_time'],
+                            {'dst_addr': f"0x{self.mstp_frame['dst_addr']:02X}"}
+                        )
+                    )                        
+                if 'len_start_time' in self.mstp_frame.keys() and 'len_end_time' in self.mstp_frame.keys():
+                    frames.append(
+                        AnalyzerFrame('DataLengthBytes',
+                            self.mstp_frame['len_start_time'], 
+                            self.mstp_frame['len_end_time'],
+                            {'data_len': self.mstp_frame['len']}
+                        )
+                    )     
+                if 'data_crc_start_time' in self.mstp_frame.keys() and 'data_crc_end_time' in self.mstp_frame.keys():
+                    frames.append(
+                        AnalyzerFrame('DataCRCBytes',
+                            self.mstp_frame['data_crc_start_time'], 
+                            self.mstp_frame['data_crc_end_time'],
+                            {'data_crc':f"0x{self.mstp_frame['data_actual_crc_msb']:02X}{self.mstp_frame['data_actual_crc_lsb']:02X}"}
+                        )
+                    )
+                if 'data_start_time' in self.mstp_frame.keys() and 'data_end_time' in self.mstp_frame.keys():
+                    frames.append(
+                        AnalyzerFrame('DataBytes',
+                            self.mstp_frame['data_start_time'], 
+                            self.mstp_frame['data_end_time']
+                        )
+                    )
+                return frames
+                # if self.mstp_frame['len'] > 0:
+                #     return AnalyzerFrame('MSTPFrameWithBytes', self.start_time, frame.end_time,
+                #         {'frame_type': frame_types_txts[self.mstp_frame['frame_type']],
+                #         'src_addr': f"0x{self.mstp_frame['src_addr']:02X}",
+                #         'dst_addr': f"0x{self.mstp_frame['dst_addr']:02X}",
+                #         'data_len': self.mstp_frame['len'],
+                #         'header_crc' : f"0x{self.mstp_frame['actual_header_crc']:02X}",
+                #         'data_crc' : f"0x{self.mstp_frame['data_actual_crc_msb']:02X}{self.mstp_frame['data_actual_crc_lsb']:02X}",
+                #         'data_bytes': '[{} ]'.format(' '.join( [ f'0x{v:02X}' for v in self.mstp_frame['data']]))
+                #         })
+                # else: 
+                #     return AnalyzerFrame('MSTPFrame', self.start_time, frame.end_time,
+                #         {'frame_type': frame_types_txts[self.mstp_frame['frame_type']],
+                #         'src_addr': f"0x{self.mstp_frame['src_addr']:02X}",
+                #         'dst_addr': f"0x{self.mstp_frame['dst_addr']:02X}",
+                #         'data_len': self.mstp_frame['len'],
+                #         'header_crc' : f"0x{self.mstp_frame['actual_header_crc']:02X}",
+                #         })
             else:
                 return AnalyzerFrame('MalformedMSTPFrame', self.start_time, frame.end_time,
                     {'frame_type': frame_types_txts[self.mstp_frame['frame_type']],
